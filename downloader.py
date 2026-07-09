@@ -12,7 +12,11 @@ CLIENT_ID = os.environ["OSU_CLIENT_ID"]
 CLIENT_SECRET = os.environ["OSU_CLIENT_SECRET"]
 TOKEN_URL = "https://osu.ppy.sh/oauth/token"
 API_BASE = "https://osu.ppy.sh/api/v2"
-MIRROR_BASE = "https://catboy.best"
+UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+MIRRORS = [
+    "https://api.nerinyan.moe/d/{}",  # no UA restrictions
+    "https://catboy.best/d/{}",        # blocks non-browser UAs
+]
 
 
 def get_token() -> str:
@@ -46,14 +50,39 @@ def get_beatmap(client: httpx.Client, beatmap_id: int) -> dict:
     return resp.json()
 
 
-def download_osz(set_id: int, dest_dir: Path) -> None:
+def try_download(url: str) -> bytes | None:
+    try:
+        resp = httpx.get(url, follow_redirects=True, timeout=30, headers={"User-Agent": UA})
+        if not resp.is_success:
+            return None
+        ct = resp.headers.get("content-type", "")
+        if "json" in ct:
+            data = resp.json()
+            if "download_url" in data:
+                return try_download(data["download_url"])
+            return None
+        if any(t in ct for t in ("osz", "octet-stream", "zip", "x-osu-beatmap-archive")):
+            return resp.content
+        return None
+    except httpx.HTTPError:
+        return None
+
+
+def download_osz(set_id: int, dest_dir: Path) -> bool:
     dest_file = dest_dir / f"{set_id}.osz"
-    if dest_file.exists():
+    if dest_file.exists() and dest_file.stat().st_size > 1000:
         print(f"  already exists: {set_id}.osz")
-        return
-    resp = httpx.get(f"{MIRROR_BASE}/d/{set_id}", follow_redirects=True)
-    resp.raise_for_status()
-    dest_file.write_bytes(resp.content)
+        return True
+
+    for template in MIRRORS:
+        url = template.format(set_id)
+        data = try_download(url)
+        if data is not None and len(data) > 1000:
+            dest_file.write_bytes(data)
+            return True
+
+    dest_file.unlink(missing_ok=True)
+    return False
 
 
 def main() -> None:
@@ -87,7 +116,7 @@ def main() -> None:
                 if len(seen_set_ids) >= num:
                     break
 
-                print(f"  resolving beatmap {beatmap_id}...")
+                print(f"  Resolving beatmap {beatmap_id}...")
                 bm = get_beatmap(client, beatmap_id)
                 set_id = bm["beatmapset_id"]
 
@@ -95,9 +124,13 @@ def main() -> None:
                     continue
 
                 seen_set_ids.add(set_id)
-                print(f"  downloading beatmapset {set_id} (plays: {entry['count']})...")
-                download_osz(set_id, dest_dir)
-                total_downloaded += 1
+                bms = bm.get("beatmapset", {})
+                name = f"{bms.get('artist', '?')} - {bms.get('title', '?')}"
+                print(f"  ({entry['count']} plays) {name} (set {set_id})...")
+                if download_osz(set_id, dest_dir):
+                    total_downloaded += 1
+                else:
+                    print(f"  Failed to download {set_id} from all mirrors")
                 time.sleep(0.5)
 
             if len(entries) < page_size:

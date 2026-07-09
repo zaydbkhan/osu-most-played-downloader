@@ -14,8 +14,8 @@ TOKEN_URL = "https://osu.ppy.sh/oauth/token"
 API_BASE = "https://osu.ppy.sh/api/v2"
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 MIRRORS = [
-    "https://api.nerinyan.moe/d/{}",  # no UA restrictions
-    "https://catboy.best/d/{}",        # blocks non-browser UAs
+    "https://api.nerinyan.moe/d/{}",
+    "https://catboy.best/d/{}",
 ]
 
 
@@ -44,12 +44,6 @@ def fetch_most_played(
     return resp.json()
 
 
-def get_beatmap(client: httpx.Client, beatmap_id: int) -> dict:
-    resp = client.get(f"{API_BASE}/beatmaps/{beatmap_id}")
-    resp.raise_for_status()
-    return resp.json()
-
-
 def try_download(url: str) -> bytes | None:
     try:
         resp = httpx.get(url, follow_redirects=True, timeout=30, headers={"User-Agent": UA})
@@ -71,17 +65,12 @@ def try_download(url: str) -> bytes | None:
 def download_osz(set_id: int, dest_dir: Path) -> bool:
     dest_file = dest_dir / f"{set_id}.osz"
     if dest_file.exists() and dest_file.stat().st_size > 1000:
-        print(f"  already exists: {set_id}.osz")
         return True
-
     for template in MIRRORS:
-        url = template.format(set_id)
-        data = try_download(url)
+        data = try_download(template.format(set_id))
         if data is not None and len(data) > 1000:
             dest_file.write_bytes(data)
             return True
-
-    dest_file.unlink(missing_ok=True)
     return False
 
 
@@ -95,50 +84,39 @@ def main() -> None:
     dest_dir = Path(sys.argv[3])
     dest_dir.mkdir(parents=True, exist_ok=True)
 
-    print("Getting OAuth token...")
     token = get_token()
-    seen_set_ids: set[int] = set()
-    total_downloaded = 0
+    seen: set[int] = set()
+    total = 0
 
     with httpx.Client(headers={"Authorization": f"Bearer {token}"}) as client:
         offset = 0
-        page_size = 100
 
-        while len(seen_set_ids) < num:
-            print(f"Fetching most played (offset={offset})...")
-            entries = fetch_most_played(client, user_id, page_size, offset)
+        while total < num:
+            entries = fetch_most_played(client, user_id, 100, offset)
             if not entries:
-                print("No more beatmaps found.")
                 break
 
-            for entry in entries:
-                beatmap_id = entry["beatmap_id"]
-                if len(seen_set_ids) >= num:
+            for e in entries:
+                if total >= num:
                     break
-
-                print(f"  Resolving beatmap {beatmap_id}...")
-                bm = get_beatmap(client, beatmap_id)
-                set_id = bm["beatmapset_id"]
-
-                if set_id in seen_set_ids:
+                set_id = e["beatmap"]["beatmapset_id"]
+                if set_id in seen:
                     continue
-
-                seen_set_ids.add(set_id)
-                bms = bm.get("beatmapset", {})
-                name = f"{bms.get('artist', '?')} - {bms.get('title', '?')}"
-                print(f"  ({entry['count']} plays) {name} (set {set_id})...")
+                seen.add(set_id)
+                bms = e["beatmapset"]
+                name = f"{bms['artist']} - {bms['title']}"
+                print(f"({e['count']:>5} plays) {name}")
                 if download_osz(set_id, dest_dir):
-                    total_downloaded += 1
+                    total += 1
                 else:
-                    print(f"  Failed to download {set_id} from all mirrors")
+                    print(f"  failed to download")
                 time.sleep(0.5)
 
-            if len(entries) < page_size:
+            if len(entries) < 100:
                 break
+            offset += 100
 
-            offset += page_size
-
-    print(f"Done. Downloaded {total_downloaded} beatmapsets to {dest_dir}")
+    print(f"\nDownloaded {total} beatmapsets to {dest_dir}")
 
 
 if __name__ == "__main__":

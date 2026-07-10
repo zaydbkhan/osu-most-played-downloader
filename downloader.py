@@ -116,9 +116,10 @@ async def try_download(client: httpx.AsyncClient, url: str, dest_path: Path) -> 
                 if not any(t in ct for t in ("osz", "octet-stream", "zip", "x-osu-beatmap-archive")):
                     return False, f"unexpected content-type: {ct}"
 
-                body = await resp.aread()
                 tmp.unlink(missing_ok=True)
-                await asyncio.to_thread(tmp.write_bytes, body)
+                with open(tmp, "wb") as f:
+                    async for chunk in resp.aiter_bytes():
+                        f.write(chunk)
                 tmp.rename(dest_path)
                 return True, ""
 
@@ -145,9 +146,7 @@ async def download_one(client: httpx.AsyncClient, entry: MapEntry, dest_dir: Pat
         ok, reason = await try_download(client, template.format(entry.set_id), dest_file)
         if ok:
             return True, ""
-        if reason and "502" not in reason:
-            last_reason = reason
-        elif reason and last_reason == "all mirrors exhausted":
+        if reason:
             last_reason = reason
 
     return False, last_reason

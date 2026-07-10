@@ -12,7 +12,7 @@ Stops early if `num_beatmaps` exceeds the user's total played beatmaps.
 
 ## Setup
 
-Copy `.env.example` to `.env` and fill in your osu! API credentials:
+Copy `example.env` to `.env` and fill in your osu! API credentials:
 
 ```
 OSU_CLIENT_ID=your_client_id

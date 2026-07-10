@@ -107,20 +107,20 @@ async def try_download(client: httpx.AsyncClient, url: str) -> tuple[bytes | Non
     return None, reason
 
 
-async def download_one(client: httpx.AsyncClient, entry: MapEntry, dest_dir: Path) -> tuple[bool, str]:
+async def download_one(client: httpx.AsyncClient, entry: MapEntry, dest_dir: Path) -> tuple[bytes | None, str]:
     dest_file = dest_dir / f"{entry.set_id}.osz"
     if dest_file.exists() and dest_file.stat().st_size > 1000:
-        return True, ""
+        return b"", ""
 
     last_reason = "all mirrors exhausted"
     for template in MIRRORS:
         data, reason = await try_download(client, template.format(entry.set_id))
         if data is not None and len(data) > 1000:
-            dest_file.write_bytes(data)
-            return True, ""
-        last_reason = reason if reason else last_reason
+            return data, ""
+        if reason:
+            last_reason = reason
 
-    return False, last_reason
+    return None, last_reason
 
 
 async def main() -> None:
@@ -146,19 +146,41 @@ async def main() -> None:
     sem = asyncio.Semaphore(args.workers)
     failed: list[tuple[MapEntry, str]] = []
 
-    async def worker(e: MapEntry, idx: int) -> None:
-        await asyncio.sleep(random.random() * (idx % 5))
+    async def attempt(entry: MapEntry) -> tuple[bytes | None, str]:
         async with sem:
-            print(f"({e.count:>5} plays) {e.artist} - {e.title}")
+            data, reason = await asyncio.wait_for(
+                download_one(client, entry, dest_dir), timeout=120
+            )
+            return data, reason
+
+    async def do_pass(
+        items: list[tuple[MapEntry, str | None]],
+        staggered: bool,
+    ) -> list[tuple[MapEntry, str]]:
+        results: list[tuple[MapEntry, str]] = []
+
+        async def worker(e: MapEntry, old_reason: str | None, idx: int) -> None:
+            if staggered:
+                await asyncio.sleep(random.random() * (idx % 5))
+            label = f"(old: {old_reason}) " if old_reason else ""
+            print(f"{label}({e.count:>5} plays) {e.artist} - {e.title}")
             try:
-                ok, reason = await asyncio.wait_for(
-                    download_one(client, e, dest_dir), timeout=120
-                )
+                data, reason = await attempt(e)
             except asyncio.TimeoutError:
-                ok, reason = False, "timed out (>120s)"
-            if not ok:
+                data, reason = None, "timed out (>120s)"
+            if data is None:
                 print(f"  FAILED: {reason}")
-                failed.append((e, reason))
+                results.append((e, reason))
+            elif data:
+                dest_dir.joinpath(f"{e.set_id}.osz").write_bytes(data)
+            return
+
+        tasks = [
+            worker(e, old_reason, i)
+            for i, (e, old_reason) in enumerate(items)
+        ]
+        await asyncio.gather(*tasks)
+        return results
 
     limits = httpx.Limits(
         max_connections=args.workers + 5,
@@ -167,10 +189,17 @@ async def main() -> None:
     async with httpx.AsyncClient(
         headers={"User-Agent": UA}, timeout=httpx.Timeout(60.0), limits=limits
     ) as client:
-        await asyncio.gather(*[worker(e, i) for i, e in enumerate(entries)])
+        failed = await do_pass([(e, None) for e in entries], staggered=True)
 
-    ok_count = len(entries) - len(failed)
-    print(f"\nDownloaded {ok_count}/{len(entries)} beatmapsets to {dest_dir}")
+        ok_count = len(entries) - len(failed)
+        print(f"\nPass 1: {ok_count}/{len(entries)}")
+
+        if failed:
+            print(f"\nRetrying {len(failed)} failed beatmaps...")
+            failed = await do_pass(failed, staggered=False)
+
+            ok_count = len(entries) - len(failed)
+            print(f"\nPass 2: {ok_count}/{len(entries)}")
 
     if failed:
         print("\nFailed beatmaps (run again to retry):")

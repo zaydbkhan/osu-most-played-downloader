@@ -171,19 +171,19 @@ async def main() -> None:
         async def worker(e: MapEntry, old_reason: str | None, idx: int) -> None:
             if staggered:
                 await asyncio.sleep(random.random() * (idx % 5))
-            label = f"(old: {old_reason}) " if old_reason else ""
-            print(f"{label}({e.count:>5} plays) {e.artist} - {e.title}")
             try:
                 data, reason = await attempt(e)
             except asyncio.TimeoutError:
                 data, reason = None, "timed out (>120s)"
+            desc = f"{e.artist} - {e.title} ({e.count} plays)"
             if data is None:
-                print(f"  FAILED: {reason}")
+                print(f"FAILED: {desc} -- {reason}")
                 results.append((e, reason))
             elif data:
                 await asyncio.to_thread(
                     dest_dir.joinpath(f"{e.set_id}.osz").write_bytes, data
                 )
+                print(f"SUCCESS: {desc}")
             return
 
         tasks = [

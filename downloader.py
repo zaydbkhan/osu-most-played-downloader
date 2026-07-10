@@ -64,12 +64,26 @@ def gather_entries(user_id: int, num: int) -> list[MapEntry]:
             for e in page:
                 if len(entries) >= num:
                     break
-                sid = e["beatmap"]["beatmapset_id"]
+                beatmap = e.get("beatmap")
+                if not beatmap:
+                    continue
+                sid = beatmap.get("beatmapset_id")
+                if not isinstance(sid, int):
+                    continue
                 if sid in seen:
                     continue
                 seen.add(sid)
-                bms = e["beatmapset"]
-                entries.append(MapEntry(sid, bms["artist"], bms["title"], e["count"]))
+                bms = e.get("beatmapset")
+                if not bms:
+                    continue
+                entries.append(
+                    MapEntry(
+                        sid,
+                        bms.get("artist", "?"),
+                        bms.get("title", "?"),
+                        e.get("count", 0),
+                    )
+                )
 
             if len(page) < 100:
                 break
@@ -78,49 +92,64 @@ def gather_entries(user_id: int, num: int) -> list[MapEntry]:
     return entries
 
 
-async def try_download(client: httpx.AsyncClient, url: str) -> tuple[bytes | None, str]:
+async def try_download(client: httpx.AsyncClient, url: str, dest_path: Path) -> tuple[bool, str]:
+    tmp = dest_path.with_suffix(".tmp")
     reason = ""
     for attempt in range(3):
         try:
-            resp = await client.get(url, follow_redirects=True)
-            if not resp.is_success:
-                if resp.status_code == 429:
-                    reason = "rate limited (429)"
-                    await asyncio.sleep(2**attempt)
-                    continue
-                return None, f"HTTP {resp.status_code}"
-            ct = resp.headers.get("content-type", "")
-            if "json" in ct:
-                data = resp.json()
-                if "download_url" in data:
-                    return await try_download(client, data["download_url"])
-                return None, f"mirror returned JSON without download_url: {data}"
-            if any(t in ct for t in ("osz", "octet-stream", "zip", "x-osu-beatmap-archive")):
-                return resp.content, ""
-            return None, f"unexpected content-type: {ct}"
+            async with client.stream("GET", url, follow_redirects=True) as resp:
+                if not resp.is_success:
+                    if resp.status_code in (429, 502, 503, 504):
+                        reason = f"HTTP {resp.status_code}"
+                        await asyncio.sleep(2**attempt)
+                        continue
+                    return False, f"HTTP {resp.status_code}"
+
+                ct = resp.headers.get("content-type", "")
+                if "json" in ct:
+                    body = await resp.aread()
+                    j = json.loads(body)
+                    if "download_url" in j:
+                        return await try_download(client, j["download_url"], dest_path)
+                    return False, f"mirror returned JSON without download_url"
+
+                if not any(t in ct for t in ("osz", "octet-stream", "zip", "x-osu-beatmap-archive")):
+                    return False, f"unexpected content-type: {ct}"
+
+                tmp.unlink(missing_ok=True)
+                with open(tmp, "wb") as f:
+                    async for chunk in resp.aiter_bytes():
+                        f.write(chunk)
+                tmp.rename(dest_path)
+                return True, ""
+
         except httpx.TimeoutException:
             reason = "timeout"
+            tmp.unlink(missing_ok=True)
             await asyncio.sleep(2**attempt)
         except httpx.HTTPError as exc:
             reason = f"HTTP error: {exc}"
+            tmp.unlink(missing_ok=True)
             await asyncio.sleep(2**attempt)
-    return None, reason
+
+    tmp.unlink(missing_ok=True)
+    return False, reason
 
 
-async def download_one(client: httpx.AsyncClient, entry: MapEntry, dest_dir: Path) -> tuple[bytes | None, str]:
+async def download_one(client: httpx.AsyncClient, entry: MapEntry, dest_dir: Path) -> tuple[bool, str]:
     dest_file = dest_dir / f"{entry.set_id}.osz"
     if dest_file.exists() and dest_file.stat().st_size > 1000:
-        return b"", ""
+        return True, ""
 
     last_reason = "all mirrors exhausted"
     for template in MIRRORS:
-        data, reason = await try_download(client, template.format(entry.set_id))
-        if data is not None and len(data) > 1000:
-            return data, ""
+        ok, reason = await try_download(client, template.format(entry.set_id), dest_file)
+        if ok:
+            return True, ""
         if reason:
             last_reason = reason
 
-    return None, last_reason
+    return False, last_reason
 
 
 async def main() -> None:
@@ -155,12 +184,12 @@ async def main() -> None:
     sem = asyncio.Semaphore(args.workers)
     failed: list[tuple[MapEntry, str]] = []
 
-    async def attempt(entry: MapEntry) -> tuple[bytes | None, str]:
+    async def attempt(entry: MapEntry) -> tuple[bool, str]:
         async with sem:
-            data, reason = await asyncio.wait_for(
+            ok, reason = await asyncio.wait_for(
                 download_one(client, entry, dest_dir), timeout=120
             )
-            return data, reason
+            return ok, reason
 
     async def do_pass(
         items: list[tuple[MapEntry, str | None]],
@@ -174,16 +203,12 @@ async def main() -> None:
             label = f"(old: {old_reason}) " if old_reason else ""
             print(f"{label}({e.count:>5} plays) {e.artist} - {e.title}")
             try:
-                data, reason = await attempt(e)
+                ok, reason = await attempt(e)
             except asyncio.TimeoutError:
-                data, reason = None, "timed out (>120s)"
-            if data is None:
+                ok, reason = False, "timed out (>120s)"
+            if not ok:
                 print(f"  FAILED: {reason}")
                 results.append((e, reason))
-            elif data:
-                await asyncio.to_thread(
-                    dest_dir.joinpath(f"{e.set_id}.osz").write_bytes, data
-                )
             return
 
         tasks = [

@@ -5,10 +5,16 @@ Download a user's most-played osu! beatmaps from most-played to least-played.
 ## Usage
 
 ```sh
-uv run downloader.py <user_id> <num_beatmaps> <download_directory>
+uv run downloader.py <user_id> <num_beatmaps> <download_directory> [--workers N]
 ```
 
 Stops early if `num_beatmaps` exceeds the user's total played beatmaps.
+
+### Options
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `-w`, `--workers` | `10` | Number of concurrent downloads |
 
 ## Setup
 

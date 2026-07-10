@@ -1,6 +1,6 @@
+import argparse
 import asyncio
 import os
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -120,13 +120,16 @@ async def download_one(client: httpx.AsyncClient, entry: MapEntry, dest_dir: Pat
 
 
 async def main() -> None:
-    if len(sys.argv) != 4:
-        print(f"Usage: {sys.argv[0]} USER_ID NUM_BEATMAPS DOWNLOAD_DIRECTORY")
-        sys.exit(1)
+    parser = argparse.ArgumentParser(description="Download most-played osu! beatmaps for a user.")
+    parser.add_argument("user_id", type=int, help="osu! user ID")
+    parser.add_argument("num_beatmaps", type=int, help="number of beatmaps to download")
+    parser.add_argument("download_directory", type=Path, help="destination directory")
+    parser.add_argument("--workers", "-w", type=int, default=10, help="concurrent downloads (default: 10)")
+    args = parser.parse_args()
 
-    user_id = int(sys.argv[1])
-    num = int(sys.argv[2])
-    dest_dir = Path(sys.argv[3])
+    user_id = args.user_id
+    num = args.num_beatmaps
+    dest_dir = args.download_directory
     dest_dir.mkdir(parents=True, exist_ok=True)
 
     print("Fetching beatmap metadata...")
@@ -136,7 +139,7 @@ async def main() -> None:
         return
     print(f"Found {len(entries)} unique beatmapsets to download\n")
 
-    sem = asyncio.Semaphore(5)
+    sem = asyncio.Semaphore(args.workers)
     failed: list[tuple[MapEntry, str]] = []
 
     async def worker(e: MapEntry) -> None:

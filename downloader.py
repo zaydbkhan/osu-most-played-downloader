@@ -1,6 +1,7 @@
 import argparse
 import asyncio
 import os
+import random
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -48,7 +49,7 @@ def gather_entries(user_id: int, num: int) -> list[MapEntry]:
     entries: list[MapEntry] = []
     offset = 0
 
-    with httpx.Client(headers={"Authorization": f"Bearer {token}"}) as client:
+    with httpx.Client(headers={"Authorization": f"Bearer {token}"}, timeout=httpx.Timeout(30.0)) as client:
         while len(entries) < num:
             resp = client.get(
                 f"{API_BASE}/users/{user_id}/beatmapsets/most_played",
@@ -78,13 +79,11 @@ def gather_entries(user_id: int, num: int) -> list[MapEntry]:
 
 
 async def try_download(client: httpx.AsyncClient, url: str) -> tuple[bytes | None, str]:
-    for attempt in range(3):
+    for attempt in range(7):
         try:
             resp = await client.get(url, follow_redirects=True, timeout=60)
             if not resp.is_success:
-                reason = f"HTTP {resp.status_code}"
-                await asyncio.sleep(2**attempt)
-                continue
+                return None, f"HTTP {resp.status_code}"
             ct = resp.headers.get("content-type", "")
             if "json" in ct:
                 data = resp.json()
@@ -142,18 +141,28 @@ async def main() -> None:
     sem = asyncio.Semaphore(args.workers)
     failed: list[tuple[MapEntry, str]] = []
 
-    async def worker(e: MapEntry) -> None:
+    async def worker(e: MapEntry, idx: int) -> None:
+        await asyncio.sleep(random.random() * (idx % 5))
         async with sem:
             print(f"({e.count:>5} plays) {e.artist} - {e.title}")
-            ok, reason = await download_one(client, e, dest_dir)
+            try:
+                ok, reason = await asyncio.wait_for(
+                    download_one(client, e, dest_dir), timeout=120
+                )
+            except asyncio.TimeoutError:
+                ok, reason = False, "timed out (>120s)"
             if not ok:
                 print(f"  FAILED: {reason}")
                 failed.append((e, reason))
 
+    limits = httpx.Limits(
+        max_connections=args.workers + 5,
+        max_keepalive_connections=args.workers,
+    )
     async with httpx.AsyncClient(
-        headers={"User-Agent": UA}, timeout=httpx.Timeout(60.0)
+        headers={"User-Agent": UA}, timeout=httpx.Timeout(60.0), limits=limits
     ) as client:
-        await asyncio.gather(*[worker(e) for e in entries])
+        await asyncio.gather(*[worker(e, i) for i, e in enumerate(entries)])
 
     ok_count = len(entries) - len(failed)
     print(f"\nDownloaded {ok_count}/{len(entries)} beatmapsets to {dest_dir}")

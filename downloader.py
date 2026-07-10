@@ -128,7 +128,7 @@ async def main() -> None:
     parser.add_argument("user_id", type=int, help="osu! user ID")
     parser.add_argument("num_beatmaps", type=int, help="number of beatmaps to download")
     parser.add_argument("download_directory", type=Path, help="destination directory")
-    parser.add_argument("--workers", "-w", type=int, default=10, help="concurrent downloads (default: 10)")
+    parser.add_argument("--workers", "-w", type=int, default=20, help="concurrent downloads (default: 20)")
     args = parser.parse_args()
 
     user_id = args.user_id

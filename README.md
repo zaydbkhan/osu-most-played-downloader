@@ -1,7 +1,5 @@
 # osu! Most Played Beatmap Downloader
 
-> **Status: In development.** Error reporting and mirror fallback behaviour are still being worked on.
-
 Download a user's most-played osu! beatmaps from most-played to least-played.
 
 ## Usage
@@ -18,11 +16,11 @@ Existing `.osz` files in the download directory are detected by their filename (
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `-w`, `--workers` | `10` | Number of concurrent downloads |
+| `-w`, `--workers` | `20` | Number of concurrent downloads |
 
 ### Behaviour
 
-- **Concurrency**: Downloads are rate-limited by `--workers` (default 10). A connection pool with matching capacity prevents resource exhaustion.
+- **Concurrency**: Downloads are rate-limited by `--workers` (default 20). A connection pool with matching capacity prevents resource exhaustion.
 - **Timeouts**: Connect timeout is 10s, read timeout is 15s (between data chunks). Servers that are slow to respond fail fast and the next mirror is tried.
 - **Retries**: Each beatmap is attempted up to 3 times per mirror on transient errors (timeout, connection reset, rate limiting). Non-2xx server errors (502, 404, etc.) fail fast and fall through to the next mirror.
 - **Second pass**: Beatmaps that fail in the first pass are automatically retried once, unless the failure was HTTP 502 (assumed to be a persistent mirror issue).

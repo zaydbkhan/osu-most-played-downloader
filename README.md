@@ -20,9 +20,12 @@ Existing `.osz` files in the download directory are detected by their filename (
 
 ### Behaviour
 
-- **Retries**: Each beatmap is attempted up to 7 times per mirror on transient errors (timeout, connection reset, rate limiting). Non-2xx server errors (502, 404, etc.) fail fast and fall through to the next mirror.
-- **Second pass**: Any beatmaps that fail in the first pass are automatically retried once at the end of the run.
-- **Caching**: Existing `.osz` files are detected and skipped on subsequent runs.
+- **Concurrency**: Downloads are rate-limited by `--workers` (default 10). A connection pool with matching capacity prevents resource exhaustion.
+- **Timeouts**: Connect timeout is 10s, read timeout is 15s (between data chunks). Servers that are slow to respond fail fast and the next mirror is tried.
+- **Retries**: Each beatmap is attempted up to 3 times per mirror on transient errors (timeout, connection reset, rate limiting). Non-2xx server errors (502, 404, etc.) fail fast and fall through to the next mirror.
+- **Second pass**: Beatmaps that fail in the first pass are automatically retried once, unless the failure was HTTP 502 (assumed to be a persistent mirror issue).
+- **Caching**: Existing `.osz` files in the output directory are detected by their filename (beatmapset ID) and skipped on subsequent runs.
+- **File writes**: Written in a thread pool to avoid blocking the event loop on disk I/O.
 
 ## Setup
 

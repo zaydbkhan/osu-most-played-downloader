@@ -79,10 +79,15 @@ def gather_entries(user_id: int, num: int) -> list[MapEntry]:
 
 
 async def try_download(client: httpx.AsyncClient, url: str) -> tuple[bytes | None, str]:
+    reason = ""
     for attempt in range(7):
         try:
             resp = await client.get(url, follow_redirects=True, timeout=60)
             if not resp.is_success:
+                if resp.status_code == 429:
+                    reason = "rate limited (429)"
+                    await asyncio.sleep(2**attempt)
+                    continue
                 return None, f"HTTP {resp.status_code}"
             ct = resp.headers.get("content-type", "")
             if "json" in ct:

@@ -17,6 +17,9 @@ API_BASE = "https://osu.ppy.sh/api/v2"
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 MIRRORS = [
     "https://api.nerinyan.moe/d/{}",
+    "https://osu.direct/api/d/{}",
+    "https://beatconnect.io/b/{}/",
+    "https://txy1.sayobot.cn/beatmaps/download/novideo/{}",
     "https://catboy.best/d/{}",
 ]
 

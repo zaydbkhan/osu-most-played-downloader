@@ -181,7 +181,9 @@ async def main() -> None:
                 print(f"  FAILED: {reason}")
                 results.append((e, reason))
             elif data:
-                dest_dir.joinpath(f"{e.set_id}.osz").write_bytes(data)
+                await asyncio.to_thread(
+                    dest_dir.joinpath(f"{e.set_id}.osz").write_bytes, data
+                )
             return
 
         tasks = [

@@ -1,5 +1,7 @@
 # osu! Most Played Beatmap Downloader
 
+> **Status: In development.** Error reporting and mirror fallback behaviour are still being worked on.
+
 Download a user's most-played osu! beatmaps from most-played to least-played.
 
 ## Usage

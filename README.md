@@ -10,11 +10,19 @@ uv run downloader.py <user_id> <num_beatmaps> <download_directory> [--workers N]
 
 Stops early if `num_beatmaps` exceeds the user's total played beatmaps.
 
+Existing `.osz` files in the download directory are detected by their filename (the beatmapset ID) and skipped automatically.
+
 ### Options
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `-w`, `--workers` | `10` | Number of concurrent downloads |
+
+### Behaviour
+
+- **Retries**: Each beatmap is attempted up to 7 times per mirror on transient errors (timeout, connection reset, rate limiting). Non-2xx server errors (502, 404, etc.) fail fast and fall through to the next mirror.
+- **Second pass**: Any beatmaps that fail in the first pass are automatically retried once at the end of the run.
+- **Caching**: Existing `.osz` files are detected and skipped on subsequent runs.
 
 ## Setup
 

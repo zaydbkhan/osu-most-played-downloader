@@ -80,9 +80,9 @@ def gather_entries(user_id: int, num: int) -> list[MapEntry]:
 
 async def try_download(client: httpx.AsyncClient, url: str) -> tuple[bytes | None, str]:
     reason = ""
-    for attempt in range(7):
+    for attempt in range(3):
         try:
-            resp = await client.get(url, follow_redirects=True, timeout=60)
+            resp = await client.get(url, follow_redirects=True)
             if not resp.is_success:
                 if resp.status_code == 429:
                     reason = "rate limited (429)"
@@ -196,7 +196,9 @@ async def main() -> None:
         max_keepalive_connections=args.workers,
     )
     async with httpx.AsyncClient(
-        headers={"User-Agent": UA}, timeout=httpx.Timeout(60.0), limits=limits
+        headers={"User-Agent": UA},
+        timeout=httpx.Timeout(connect=10.0, read=15.0, write=10.0, pool=10.0),
+        limits=limits,
     ) as client:
         failed = await do_pass([(e, None) for e in entries], staggered=True)
 
@@ -204,8 +206,12 @@ async def main() -> None:
         print(f"\nPass 1: {ok_count}/{len(entries)}")
 
         if failed:
-            print(f"\nRetrying {len(failed)} failed beatmaps...")
-            failed = await do_pass(failed, staggered=False)
+            retryable = [(e, r) for e, r in failed if "502" not in r]
+            skipped_502 = [(e, r) for e, r in failed if "502" in r]
+            if retryable:
+                print(f"\nRetrying {len(retryable)} (skipping {len(skipped_502)} with HTTP 502)...")
+                retried = await do_pass(retryable, staggered=False)
+                failed = retried + skipped_502
 
             ok_count = len(entries) - len(failed)
             print(f"\nPass 2: {ok_count}/{len(entries)}")

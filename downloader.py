@@ -141,7 +141,16 @@ async def main() -> None:
     if not entries:
         print("No beatmaps found.")
         return
-    print(f"Found {len(entries)} unique beatmapsets to download\n")
+    print(f"Found {len(entries)} unique beatmapsets to download")
+
+    existing_ids = {
+        int(f.stem) for f in dest_dir.glob("*.osz") if f.stat().st_size > 1000
+    }
+    entries = [e for e in entries if e.set_id not in existing_ids]
+    if not entries:
+        print("All beatmaps already downloaded.")
+        return
+    print(f"({len(existing_ids)} already cached, {len(entries)} to download)\n")
 
     sem = asyncio.Semaphore(args.workers)
     failed: list[tuple[MapEntry, str]] = []

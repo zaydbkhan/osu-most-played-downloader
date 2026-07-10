@@ -77,11 +77,12 @@ def gather_entries(user_id: int, num: int) -> list[MapEntry]:
     return entries
 
 
-async def try_download(client: httpx.AsyncClient, url: str) -> bytes | None:
+async def try_download(client: httpx.AsyncClient, url: str) -> tuple[bytes | None, str]:
     for attempt in range(3):
         try:
             resp = await client.get(url, follow_redirects=True, timeout=60)
             if not resp.is_success:
+                reason = f"HTTP {resp.status_code}"
                 await asyncio.sleep(2**attempt)
                 continue
             ct = resp.headers.get("content-type", "")
@@ -89,26 +90,33 @@ async def try_download(client: httpx.AsyncClient, url: str) -> bytes | None:
                 data = resp.json()
                 if "download_url" in data:
                     return await try_download(client, data["download_url"])
-                return None
+                return None, f"mirror returned JSON without download_url: {data}"
             if any(t in ct for t in ("osz", "octet-stream", "zip", "x-osu-beatmap-archive")):
-                return resp.content
-            return None
-        except httpx.HTTPError:
+                return resp.content, ""
+            return None, f"unexpected content-type: {ct}"
+        except httpx.TimeoutException:
+            reason = "timeout"
             await asyncio.sleep(2**attempt)
-    return None
+        except httpx.HTTPError as exc:
+            reason = f"HTTP error: {exc}"
+            await asyncio.sleep(2**attempt)
+    return None, reason
 
 
-async def download_one(client: httpx.AsyncClient, entry: MapEntry, dest_dir: Path) -> bool:
+async def download_one(client: httpx.AsyncClient, entry: MapEntry, dest_dir: Path) -> tuple[bool, str]:
     dest_file = dest_dir / f"{entry.set_id}.osz"
     if dest_file.exists() and dest_file.stat().st_size > 1000:
-        return True
+        return True, ""
 
+    last_reason = "all mirrors exhausted"
     for template in MIRRORS:
-        data = await try_download(client, template.format(entry.set_id))
+        data, reason = await try_download(client, template.format(entry.set_id))
         if data is not None and len(data) > 1000:
             dest_file.write_bytes(data)
-            return True
-    return False
+            return True, ""
+        last_reason = reason if reason else last_reason
+
+    return False, last_reason
 
 
 async def main() -> None:
@@ -129,15 +137,15 @@ async def main() -> None:
     print(f"Found {len(entries)} unique beatmapsets to download\n")
 
     sem = asyncio.Semaphore(5)
-    failed: list[MapEntry] = []
+    failed: list[tuple[MapEntry, str]] = []
 
     async def worker(e: MapEntry) -> None:
         async with sem:
             print(f"({e.count:>5} plays) {e.artist} - {e.title}")
-            ok = await download_one(client, e, dest_dir)
+            ok, reason = await download_one(client, e, dest_dir)
             if not ok:
-                print(f"  FAILED")
-                failed.append(e)
+                print(f"  FAILED: {reason}")
+                failed.append((e, reason))
 
     async with httpx.AsyncClient(
         headers={"User-Agent": UA}, timeout=httpx.Timeout(60.0)
@@ -149,8 +157,12 @@ async def main() -> None:
 
     if failed:
         print("\nFailed beatmaps (run again to retry):")
-        for e in failed:
-            print(f"  {e.set_id:>8}  ({e.count:>5} plays) {e.artist} - {e.title}")
+        for e, reason in failed:
+            url = f"https://osu.ppy.sh/beatmapsets/{e.set_id}"
+            print(f"  {url}")
+            print(f"    ({e.count} plays) {e.artist} - {e.title}")
+            print(f"    reason: {reason}")
+            print()
 
 
 if __name__ == "__main__":

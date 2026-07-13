@@ -12,6 +12,9 @@ Stops early if `num_beatmaps` exceeds the user's total played beatmaps.
 
 Existing `.osz` files in the download directory are detected by their filename (the beatmapset ID) and skipped automatically.
 
+Note: download_directory should not be your osu! maps folder. After downloading the maps, select & drag them into osu! and the 
+game will figure it out automatically (it may take a little while).
+
 ### Options
 
 | Flag | Default | Description |
